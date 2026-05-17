@@ -25,6 +25,11 @@ char* sys_sbrk(int,int);
 int pause(int);
 int uptime(void);
 
+struct proc_account;
+
+int getacct(int, struct proc_account *);
+int waitacct(int *, struct proc_account *);
+
 // ulib.c
 int stat(const char*, struct stat*);
 char* strcpy(char*, const char*);
