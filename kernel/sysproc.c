@@ -105,3 +105,28 @@ sys_uptime(void)
   release(&tickslock);
   return xticks;
 }
+
+
+uint64
+sys_getacct(void)
+{
+  int pid;
+  uint64 addr;
+
+  argint(0, &pid);
+  argaddr(1, &addr);
+
+  return getacct(pid, addr);
+}
+
+uint64
+sys_waitacct(void)
+{
+  uint64 status_addr;
+  uint64 acct_addr;
+
+  argaddr(0, &status_addr);
+  argaddr(1, &acct_addr);
+
+  return waitacct(status_addr, acct_addr);
+}
