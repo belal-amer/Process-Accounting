@@ -16,6 +16,7 @@ struct context {
   uint64 s9;
   uint64 s10;
   uint64 s11;
+
 };
 
 // Per-CPU state.
@@ -92,6 +93,12 @@ struct proc {
   int xstate;                  // Exit status to be returned to parent's wait
   int pid;                     // Process ID
 
+  // Process accounting fields
+  uint64 cpu_ticks;
+  uint64 creation_tick;
+  uint64 exit_tick;
+  uint64 max_mem_bytes;
+
   // wait_lock must be held when using this:
   struct proc *parent;         // Parent process
 
@@ -104,4 +111,5 @@ struct proc {
   struct file *ofile[NOFILE];  // Open files
   struct inode *cwd;           // Current directory
   char name[16];               // Process name (debugging)
+
 };
