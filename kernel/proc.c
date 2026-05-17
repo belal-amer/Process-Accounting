@@ -5,6 +5,9 @@
 #include "spinlock.h"
 #include "proc.h"
 #include "defs.h"
+#include "proc_account.h"
+
+extern uint ticks;
 
 struct cpu cpus[NCPU];
 
@@ -125,6 +128,12 @@ found:
   p->pid = allocpid();
   p->state = USED;
 
+  // Initialize process accounting fields
+  p->cpu_ticks = 0;
+  p->creation_tick = ticks;
+  p->exit_tick = 0;
+  p->max_mem_bytes = 0;
+
   // Allocate a trapframe page.
   if((p->trapframe = (struct trapframe *)kalloc()) == 0){
     freeproc(p);
@@ -168,6 +177,11 @@ freeproc(struct proc *p)
   p->chan = 0;
   p->killed = 0;
   p->xstate = 0;
+  p->cpu_ticks = 0;
+  p->creation_tick = 0;
+  p->exit_tick = 0;
+  p->max_mem_bytes = 0;
+
   p->state = UNUSED;
 }
 
@@ -224,6 +238,7 @@ userinit(void)
   p = allocproc();
   initproc = p;
   
+p->max_mem_bytes = p->sz;
   p->cwd = namei("/");
 
   p->state = RUNNABLE;
@@ -248,6 +263,10 @@ growproc(int n)
     sz = uvmdealloc(p->pagetable, sz, sz + n);
   }
   p->sz = sz;
+
+  if(p->sz > p->max_mem_bytes)
+  p->max_mem_bytes = p->sz;
+
   return 0;
 }
 
@@ -272,6 +291,7 @@ kfork(void)
     return -1;
   }
   np->sz = p->sz;
+np->max_mem_bytes = np->sz;
 
   // copy saved user registers.
   *(np->trapframe) = *(p->trapframe);
@@ -353,6 +373,7 @@ kexit(int status)
   acquire(&p->lock);
 
   p->xstate = status;
+  p->exit_tick= ticks;
   p->state = ZOMBIE;
 
   release(&wait_lock);
@@ -683,5 +704,125 @@ procdump(void)
       state = "???";
     printf("%d %s %s", p->pid, state, p->name);
     printf("\n");
+  }
+}
+
+
+static void
+fill_proc_account(struct proc *p, struct proc_account *info)
+{
+  info->pid = p->pid;
+  info->ppid = p->parent ? p->parent->pid : -1;
+  safestrcpy(info->name, p->name, sizeof(info->name));
+
+  info->cpu_ticks = p->cpu_ticks;
+
+  info->mem_bytes = p->sz;
+  info->max_mem_bytes = p->max_mem_bytes;
+
+  info->creation_tick = p->creation_tick;
+  info->exit_tick = p->exit_tick;
+
+  if(p->exit_tick != 0)
+    info->elapsed_ticks = p->exit_tick - p->creation_tick;
+  else
+    info->elapsed_ticks = ticks - p->creation_tick;
+
+  info->exit_status = p->xstate;
+  info->exited = (p->state == ZOMBIE);
+}
+
+int
+getacct(int pid, uint64 addr)
+{
+  struct proc *p = myproc();
+  struct proc *pp;
+  struct proc_account info;
+  int found = 0;
+
+  acquire(&wait_lock);
+
+  for(pp = proc; pp < &proc[NPROC]; pp++){
+    acquire(&pp->lock);
+
+    if(pp->state != UNUSED && pp->pid == pid){
+      fill_proc_account(pp, &info);
+      found = 1;
+      release(&pp->lock);
+      break;
+    }
+
+    release(&pp->lock);
+  }
+
+  release(&wait_lock);
+
+  if(!found)
+    return -1;
+
+  if(copyout(p->pagetable, addr, (char *)&info, sizeof(info)) < 0)
+    return -1;
+
+  return 0;
+}
+
+int
+waitacct(uint64 status_addr, uint64 acct_addr)
+{
+  struct proc *pp;
+  int havekids;
+  int pid;
+  struct proc *p = myproc();
+  struct proc_account info;
+  int status;
+
+  acquire(&wait_lock);
+
+  for(;;){
+    havekids = 0;
+
+    for(pp = proc; pp < &proc[NPROC]; pp++){
+      if(pp->parent == p){
+        acquire(&pp->lock);
+
+        havekids = 1;
+
+        if(pp->state == ZOMBIE){
+          pid = pp->pid;
+          status = pp->xstate;
+
+          fill_proc_account(pp, &info);
+
+          if(status_addr != 0 &&
+             copyout(p->pagetable, status_addr, (char *)&status, sizeof(status)) < 0){
+            release(&pp->lock);
+            release(&wait_lock);
+            return -1;
+          }
+
+          if(acct_addr != 0 &&
+             copyout(p->pagetable, acct_addr, (char *)&info, sizeof(info)) < 0){
+            release(&pp->lock);
+            release(&wait_lock);
+            return -1;
+          }
+
+          freeproc(pp);
+          release(&pp->lock);
+          release(&wait_lock);
+
+          return pid;
+        }
+
+        release(&pp->lock);
+      }
+    }
+
+    if(!havekids || killed(p)){
+      release(&wait_lock);
+      return -1;
+    }
+
+    sleep(p, &wait_lock);
   }
 }
